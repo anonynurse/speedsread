@@ -404,4 +404,53 @@
         nextIdx = indexFromPos(pos);
 
         running = true;
-        p
+        playBtn.textContent = 'Pause';
+        playBtn.classList.add('pause');
+
+        // Show immediately, then continue on timer
+        showWord(nextIdx);
+        nextIdx += 1;
+        scheduleNext();
+      }
+
+      playBtn.addEventListener('click', () => {
+        if (running) stopReading();
+        else startFromCursor();
+      });
+
+      // WPM is live: reschedule next tick for responsiveness
+      wpmInput.addEventListener('input', () => {
+        if (!running) return;
+        if (timer) { clearTimeout(timer); timer = null; }
+        scheduleNext();
+      });
+
+      // Clean up WPM on blur
+      wpmInput.addEventListener('blur', () => {
+        wpmInput.value = String(getWpm());
+      });
+
+      // If you edit the text while running, pause (keeps indexes sane)
+      textInput.addEventListener('input', () => {
+        if (running) stopReading();
+      });
+
+      // Keyboard shortcuts
+      document.addEventListener('keydown', (e) => {
+        const active = document.activeElement;
+        const inWpm = active === wpmInput;
+
+        if (e.key === ' ' && !inWpm) {
+          e.preventDefault();
+          if (running) stopReading();
+          else startFromCursor();
+        }
+
+        if (e.key === 'Escape') {
+          if (running) stopReading();
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
