@@ -116,8 +116,8 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* Static, framed word box (no crosshair) */
     .wordFrame{
-      position:relative;
       height: 150px;
       border: 2px solid var(--border);
       background: var(--panel);
@@ -127,49 +127,6 @@
       align-items:center;
       justify-content:center;
       overflow:hidden;
-
-      --crossInset: 14px;
-      --crossGap: 54px;
-    }
-
-    .wordFrame::before{
-      content:"";
-      position:absolute;
-      left:50%;
-      top: var(--crossInset);
-      bottom: var(--crossInset);
-      width: 2px;
-      transform: translateX(-50%);
-      opacity: .85;
-      background: linear-gradient(
-        to bottom,
-        var(--border) 0,
-        var(--border) calc(50% - var(--crossGap)),
-        transparent calc(50% - var(--crossGap)),
-        transparent calc(50% + var(--crossGap)),
-        var(--border) calc(50% + var(--crossGap)),
-        var(--border) 100%
-      );
-    }
-
-    .wordFrame::after{
-      content:"";
-      position:absolute;
-      left: var(--crossInset);
-      right: var(--crossInset);
-      top:50%;
-      height: 2px;
-      transform: translateY(-50%);
-      opacity: .55;
-      background: linear-gradient(
-        to right,
-        var(--border) 0,
-        var(--border) calc(50% - var(--crossGap)),
-        transparent calc(50% - var(--crossGap)),
-        transparent calc(50% + var(--crossGap)),
-        var(--border) calc(50% + var(--crossGap)),
-        var(--border) 100%
-      );
     }
 
     .wordBox{
@@ -184,9 +141,6 @@
       overflow: hidden;
       text-overflow: ellipsis;
       user-select:none;
-
-      position: relative;
-      z-index: 1;
     }
 
     .w-left, .w-right{ color: var(--text); }
@@ -247,7 +201,7 @@
     <textarea id="textInput" spellcheck="false"
       placeholder="Paste or type text here…&#10;&#10;Tip: Pause, click anywhere in the text, then press Read to resume from that spot."></textarea>
 
-    <div class="hint">Space = Read/Pause • Esc = Pause • WPM is live</div>
+    <div class="hint">Space = Read/Pause • Esc = Pause • WPM is live • Periods get a double pause</div>
   </div>
 
   <script>
@@ -263,9 +217,7 @@
       let nextIdx = 0;         // index of next word to show
       let running = false;
       let timer = null;
-
-      // multiplier for the *next* delay (lets us do “double pause after a period”)
-      let nextDelayMult = 1;
+      let currentMult = 1;     // multiplier for the delay AFTER the currently shown word
 
       const escHtml = (s) => s
         .replaceAll('&', '&amp;')
@@ -299,7 +251,7 @@
 
       function parseWords(text) {
         const out = [];
-        const re = /\S+/g; // whitespace-separated "words" (keeps punctuation attached)
+        const re = /\S+/g; // whitespace-separated (keeps punctuation attached)
         let m;
         while ((m = re.exec(text)) !== null) {
           out.push({ start: m.index, end: m.index + m[0].length, text: m[0] });
@@ -310,26 +262,22 @@
       function indexFromPos(pos) {
         if (!words.length) return 0;
 
+        // If cursor is inside a word, use that word.
+        // If cursor is between words, start at the next word.
         let lo = 0, hi = words.length - 1, ans = words.length - 1;
         while (lo <= hi) {
           const mid = (lo + hi) >> 1;
           const w = words[mid];
-
-          if (pos < w.start) {
-            ans = mid;
-            hi = mid - 1;
-          } else if (pos >= w.end) {
-            lo = mid + 1;
-          } else {
-            return mid;
-          }
+          if (pos < w.start) { ans = mid; hi = mid - 1; }
+          else if (pos >= w.end) { lo = mid + 1; }
+          else { return mid; }
         }
         return Math.min(ans, words.length - 1);
       }
 
       function renderWord(word) {
-        if (!word) return '';
-        const s = String(word);
+        const s = String(word || '');
+        if (!s) return '';
         const len = s.length;
         const pivot = Math.floor((len - 1) / 2);
         const left = escHtml(s.slice(0, pivot));
@@ -338,11 +286,10 @@
         return `<span class="w-left">${left}</span><span class="w-pivot">${mid}</span><span class="w-right">${right}</span>`;
       }
 
-      // Double pause after a period (handles quotes/brackets like '." ) .” .)’ etc)
-      function pauseMultiplierFor(wordText) {
+      // Double pause after a period (ASCII-safe; handles .") .') .)] .} etc)
+      function multiplierAfter(wordText) {
         const t = String(wordText || '');
-        const endsWithPeriod = /\.[)"'\]\}”’]*$/.test(t);
-        return endsWithPeriod ? 2 : 1;
+        return /\.[)"'\]\}]*$/.test(t) ? 2 : 1;
       }
 
       function showWord(idx) {
@@ -352,13 +299,14 @@
         wordBox.innerHTML = renderWord(w.text);
 
         // Highlight current word in the textbox using selection
+        // (this is the most reliable “highlight” inside a textarea)
         textInput.focus();
         textInput.setSelectionRange(w.start, w.end);
 
         setStatus(`${idx + 1} / ${words.length}`);
 
-        // set the multiplier for the *next* interval
-        nextDelayMult = pauseMultiplierFor(w.text);
+        // set multiplier for the delay *after* this word
+        currentMult = multiplierAfter(w.text);
       }
 
       function stopReading(finalMsg) {
@@ -373,7 +321,7 @@
         if (!running) return;
 
         const baseDelay = 60000 / getWpm();
-        const delay = baseDelay * (nextDelayMult || 1);
+        const delay = baseDelay * (currentMult || 1);
 
         timer = setTimeout(() => {
           if (!running) return;
@@ -418,14 +366,13 @@
         else startFromCursor();
       });
 
-      // WPM is live: reschedule next tick for responsiveness
+      // WPM is live: reschedule next tick immediately
       wpmInput.addEventListener('input', () => {
         if (!running) return;
         if (timer) { clearTimeout(timer); timer = null; }
         scheduleNext();
       });
 
-      // Clean up WPM on blur
       wpmInput.addEventListener('blur', () => {
         wpmInput.value = String(getWpm());
       });
