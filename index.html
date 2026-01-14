@@ -13,7 +13,6 @@
       --border:#d1d5db;
       --shadow: 0 8px 24px rgba(0,0,0,.08);
 
-      --pivot:#ef4444;
       --btn:#16a34a;
       --btnText:#ffffff;
 
@@ -114,9 +113,9 @@
       color: var(--muted);
       font-weight: 700;
       font-variant-numeric: tabular-nums;
+      user-select:none;
     }
 
-    /* Static, framed word box (no crosshair) */
     .wordFrame{
       height: 150px;
       border: 2px solid var(--border);
@@ -143,8 +142,10 @@
       user-select:none;
     }
 
-    .w-left, .w-right{ color: var(--text); }
-    .w-pivot{ color: var(--pivot); }
+    /* extra space between word box and textarea */
+    .spacer{
+      height: 6px;
+    }
 
     textarea{
       width: 100%;
@@ -198,10 +199,14 @@
       <div id="wordBox" class="wordBox">Paste text below, then press Read.</div>
     </section>
 
+    <div class="spacer"></div>
+
     <textarea id="textInput" spellcheck="false"
       placeholder="Paste or type text here…&#10;&#10;Tip: Pause, click anywhere in the text, then press Read to resume from that spot."></textarea>
 
-    <div class="hint">Space = Read/Pause • Esc = Pause • WPM is live • Periods get a double pause</div>
+    <div class="hint">
+      Space = Read/Pause • Esc = Pause • ←/→ jump 5 words • ↑/↓ WPM ±10
+    </div>
   </div>
 
   <script>
@@ -218,13 +223,6 @@
       let running = false;
       let timer = null;
       let currentMult = 1;     // multiplier for the delay AFTER the currently shown word
-
-      const escHtml = (s) => s
-        .replaceAll('&', '&amp;')
-        .replaceAll('<', '&lt;')
-        .replaceAll('>', '&gt;')
-        .replaceAll('"', '&quot;')
-        .replaceAll("'", '&#039;');
 
       function setStatus(msg) { statusEl.textContent = msg || ''; }
 
@@ -243,10 +241,15 @@
         localStorage.setItem('iris_dark', darkToggle.checked ? '1' : '0');
       });
 
+      function clamp(n, lo, hi){ return Math.max(lo, Math.min(hi, n)); }
+
       function getWpm() {
         const n = Number(wpmInput.value);
         if (!Number.isFinite(n)) return 300;
-        return Math.max(50, Math.min(2000, Math.round(n)));
+        return clamp(Math.round(n), 50, 2000);
+      }
+      function setWpm(n){
+        wpmInput.value = String(clamp(Math.round(n), 50, 2000));
       }
 
       function parseWords(text) {
@@ -275,37 +278,78 @@
         return Math.min(ans, words.length - 1);
       }
 
-      function renderWord(word) {
-        const s = String(word || '');
-        if (!s) return '';
-        const len = s.length;
-        const pivot = Math.floor((len - 1) / 2);
-        const left = escHtml(s.slice(0, pivot));
-        const mid = escHtml(s.slice(pivot, pivot + 1));
-        const right = escHtml(s.slice(pivot + 1));
-        return `<span class="w-left">${left}</span><span class="w-pivot">${mid}</span><span class="w-right">${right}</span>`;
-      }
-
-      // Double pause after a period (ASCII-safe; handles .") .') .)] .} etc)
+      // Double pause after a period (handles .") .') .)] .} etc)
       function multiplierAfter(wordText) {
         const t = String(wordText || '');
         return /\.[)"'\]\}]*$/.test(t) ? 2 : 1;
+      }
+
+      // Keep highlighted selection visible inside the textarea
+      function scrollSelectionIntoView() {
+        // Works by using a hidden “mirror” to calculate the selection’s pixel position.
+        const start = textInput.selectionStart ?? 0;
+
+        const cs = getComputedStyle(textInput);
+        const mirror = document.createElement('div');
+        mirror.style.position = 'absolute';
+        mirror.style.visibility = 'hidden';
+        mirror.style.whiteSpace = 'pre-wrap';
+        mirror.style.wordWrap = 'break-word';
+        mirror.style.overflowWrap = 'break-word';
+
+        mirror.style.font = cs.font;
+        mirror.style.fontSize = cs.fontSize;
+        mirror.style.lineHeight = cs.lineHeight;
+        mirror.style.padding = cs.padding;
+        mirror.style.border = cs.border;
+        mirror.style.width = textInput.clientWidth + 'px';
+
+        const before = textInput.value.slice(0, start);
+        const after = textInput.value.slice(start);
+
+        // Use a marker span to find the caret position
+        mirror.textContent = before;
+        const marker = document.createElement('span');
+        marker.textContent = '\u200b'; // zero-width space
+        mirror.appendChild(marker);
+        mirror.appendChild(document.createTextNode(after.slice(0, 1)));
+
+        document.body.appendChild(mirror);
+        const markerTop = marker.offsetTop;
+        const lineH = parseFloat(cs.lineHeight) || 20;
+        document.body.removeChild(mirror);
+
+        const paddingTop = parseFloat(cs.paddingTop) || 0;
+        const targetTop = markerTop - paddingTop;
+
+        const viewTop = textInput.scrollTop;
+        const viewBottom = viewTop + textInput.clientHeight;
+        const caretTop = targetTop;
+        const caretBottom = caretTop + lineH;
+
+        const margin = lineH * 2;
+
+        if (caretTop < viewTop + margin) {
+          textInput.scrollTop = Math.max(0, caretTop - margin);
+        } else if (caretBottom > viewBottom - margin) {
+          textInput.scrollTop = caretBottom - textInput.clientHeight + margin;
+        }
       }
 
       function showWord(idx) {
         const w = words[idx];
         if (!w) return;
 
-        wordBox.innerHTML = renderWord(w.text);
+        wordBox.textContent = w.text;
 
-        // Highlight current word in the textbox using selection
-        // (this is the most reliable “highlight” inside a textarea)
+        // Highlight word in textarea
         textInput.focus();
         textInput.setSelectionRange(w.start, w.end);
 
-        setStatus(`${idx + 1} / ${words.length}`);
+        // Scroll textarea so selection stays in view
+        scrollSelectionIntoView();
 
-        // set multiplier for the delay *after* this word
+        setStatus(`${idx + 1} / ${words.length}`);
         currentMult = multiplierAfter(w.text);
       }
 
@@ -337,11 +381,14 @@
         }, delay);
       }
 
-      function startFromCursor() {
+      function ensureWordsParsed() {
         const text = textInput.value;
         words = parseWords(text);
+        return words.length > 0;
+      }
 
-        if (!words.length) {
+      function startFromCursor() {
+        if (!ensureWordsParsed()) {
           wordBox.textContent = 'Paste text below, then press Read.';
           setStatus('');
           stopReading();
@@ -355,10 +402,51 @@
         playBtn.textContent = 'Pause';
         playBtn.classList.add('pause');
 
-        // Show immediately, then continue on timer
         showWord(nextIdx);
         nextIdx += 1;
         scheduleNext();
+      }
+
+      function jump(delta) {
+        if (!ensureWordsParsed()) return;
+
+        // Figure out “current” word index:
+        // - if running, the word currently shown is nextIdx-1
+        // - if paused, use cursor position
+        let cur;
+        if (running) cur = clamp(nextIdx - 1, 0, words.length - 1);
+        else {
+          const pos = textInput.selectionStart ?? 0;
+          cur = indexFromPos(pos);
+        }
+
+        const target = clamp(cur + delta, 0, words.length - 1);
+
+        if (running) {
+          // show immediately, then continue from next word
+          showWord(target);
+          nextIdx = target + 1;
+          if (timer) { clearTimeout(timer); timer = null; }
+          scheduleNext();
+        } else {
+          // paused: move selection + update word box
+          const w = words[target];
+          wordBox.textContent = w.text;
+          textInput.focus();
+          textInput.setSelectionRange(w.start, w.end);
+          scrollSelectionIntoView();
+          setStatus(`${target + 1} / ${words.length}`);
+        }
+      }
+
+      function bumpWpm(delta) {
+        const newWpm = getWpm() + delta;
+        setWpm(newWpm);
+
+        if (running) {
+          if (timer) { clearTimeout(timer); timer = null; }
+          scheduleNext();
+        }
       }
 
       playBtn.addEventListener('click', () => {
@@ -374,7 +462,7 @@
       });
 
       wpmInput.addEventListener('blur', () => {
-        wpmInput.value = String(getWpm());
+        setWpm(getWpm());
       });
 
       // If you edit the text while running, pause (keeps indexes sane)
@@ -387,15 +475,55 @@
         const active = document.activeElement;
         const inWpm = active === wpmInput;
 
+        // Space toggles, unless typing in WPM box
         if (e.key === ' ' && !inWpm) {
           e.preventDefault();
           if (running) stopReading();
           else startFromCursor();
+          return;
         }
 
         if (e.key === 'Escape') {
           if (running) stopReading();
+          return;
         }
+
+        // Arrow keys: don’t steal them when user is editing in the WPM input
+        if (inWpm) return;
+
+        if (e.key === 'ArrowLeft') {
+          e.preventDefault();
+          jump(-5);
+        } else if (e.key === 'ArrowRight') {
+          e.preventDefault();
+          jump(5);
+        } else if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          bumpWpm(10);
+        } else if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          bumpWpm(-10);
+        }
+      });
+
+      // Nice to have: if paused and user clicks somewhere, update the word box to that position
+      textInput.addEventListener('mouseup', () => {
+        if (running) return;
+        if (!ensureWordsParsed()) return;
+        const pos = textInput.selectionStart ?? 0;
+        const idx = indexFromPos(pos);
+        const w = words[idx];
+        wordBox.textContent = w.text;
+        setStatus(`${idx + 1} / ${words.length}`);
+      });
+      textInput.addEventListener('keyup', () => {
+        if (running) return;
+        if (!ensureWordsParsed()) return;
+        const pos = textInput.selectionStart ?? 0;
+        const idx = indexFromPos(pos);
+        const w = words[idx];
+        wordBox.textContent = w.text;
+        setStatus(`${idx + 1} / ${words.length}`);
       });
     })();
   </script>
